@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:convert';
 import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:hotkey_manager/hotkey_manager.dart';
 import 'package:flutter/foundation.dart';
@@ -34,58 +35,120 @@ class _MaddyHomeState extends State<MaddyHome>
     with SingleTickerProviderStateMixin {
   bool isRunning = false;
   Process? maddyProcess;
+
   String maddyStatus = 'Ready when you are.';
   bool isStartHovered = false;
   bool isStopHovered = false;
+
   int cpuUsage = 0;
   int ramUsage = 0;
   int storageUsage = 0;
   int batteryUsage = 0;
+
   Timer? systemInfoTimer;
   HotKey? maddyHotKey;
-  Future<void> getSystemInfo() async {
-    if (kIsWeb) {
-      return;
+
+  // =========================================================
+  // FIND PYTHON / MADDY DIRECTORY
+  // =========================================================
+
+  String getPythonDirectory() {
+    final exeDirectory = File(Platform.resolvedExecutable).parent.path;
+
+    // Final installed/release version:
+    // MaddyRelease/
+    //   maddy_desktop.exe
+    //   python/
+    //      MaddyPython.exe
+    //      SystemInfoRunner.exe
+
+    final bundledDirectory = '$exeDirectory\\python';
+
+    if (File('$bundledDirectory\\MaddyPython.exe').existsSync()) {
+      return bundledDirectory;
     }
+
+    // Development fallback
+    return r'F:\maddy\maddyassistant\dist';
+  }
+
+  String getMaddyPythonPath() {
+    return '${getPythonDirectory()}\\MaddyPython.exe';
+  }
+
+  String getSystemInfoPath() {
+    return '${getPythonDirectory()}\\SystemInfoRunner.exe';
+  }
+
+  // =========================================================
+  // SYSTEM INFORMATION
+  // =========================================================
+
+  Future<void> getSystemInfo() async {
     try {
-      final result = await Process.run(r'C:\Python314\python.exe', [
-        '-c',
-        '''
-import system_info
+      final systemInfoPath = getSystemInfoPath();
+      final pythonDirectory = getPythonDirectory();
 
-print(system_info.get_cpu_usage())
-print(system_info.get_ram_usage())
-print(system_info.get_storage_usage())
-print(system_info.get_battery())
-''',
-      ], workingDirectory: r'F:\maddyassistant');
+      debugPrint('----------------------------------------');
+      debugPrint('SystemInfo path: $systemInfoPath');
+      debugPrint('SystemInfo exists: ${File(systemInfoPath).existsSync()}');
+      debugPrint('Working directory: $pythonDirectory');
 
-      final lines = result.stdout.toString().trim().split(RegExp(r'\s+'));
+      final result = await Process.run(
+        systemInfoPath,
+        [],
+        workingDirectory: pythonDirectory,
+        runInShell: false,
+      );
 
-      if (lines.length >= 4) {
-        setState(() {
-          cpuUsage = int.tryParse(lines[0]) ?? 0;
-          ramUsage = int.tryParse(lines[1]) ?? 0;
-          storageUsage = int.tryParse(lines[2]) ?? 0;
-          batteryUsage = int.tryParse(lines[3]) ?? 0;
-        });
+      debugPrint('SystemInfo exit code: ${result.exitCode}');
+      debugPrint('SystemInfo stdout: ${result.stdout}');
+      debugPrint('SystemInfo stderr: ${result.stderr}');
+
+      if (result.exitCode == 0) {
+        final lines = result.stdout.toString().trim().split(RegExp(r'\r?\n'));
+
+        if (lines.length >= 4) {
+          final cpu = int.tryParse(lines[0].trim());
+          final ram = int.tryParse(lines[1].trim());
+          final storage = int.tryParse(lines[2].trim());
+          final battery = int.tryParse(lines[3].trim());
+
+          if (cpu != null &&
+              ram != null &&
+              storage != null &&
+              battery != null &&
+              mounted) {
+            setState(() {
+              cpuUsage = cpu;
+              ramUsage = ram;
+              storageUsage = storage;
+              batteryUsage = battery;
+            });
+          }
+        }
       }
-
-      debugPrint('CPU: $cpuUsage');
-      debugPrint('RAM: $ramUsage');
-      debugPrint('Storage: $storageUsage');
-      debugPrint('Battery: $batteryUsage');
     } catch (e) {
-      debugPrint('System info error: $e');
+      debugPrint('SYSTEM INFO ERROR: $e');
     }
   }
 
+  // =========================================================
+  // ANIMATION
+  // =========================================================
+
   late AnimationController animationController;
+
+  // =========================================================
+  // INIT
+  // =========================================================
 
   @override
   void initState() {
     super.initState();
+
     getSystemInfo();
+
     systemInfoTimer = Timer.periodic(
       const Duration(seconds: 3),
       (_) => getSystemInfo(),
@@ -97,6 +160,10 @@ print(system_info.get_battery())
     )..repeat(reverse: true);
   }
 
+  // =========================================================
+  // DISPOSE
+  // =========================================================
+
   @override
   void dispose() {
     systemInfoTimer?.cancel();
@@ -105,39 +172,54 @@ print(system_info.get_battery())
     super.dispose();
   }
 
+  // =========================================================
+  // START MADDY
+  // =========================================================
+
   Future<void> startMaddy() async {
     if (maddyProcess != null) {
       return;
     }
 
     try {
-      debugPrint('Starting Maddy Python process...');
+      final maddyPath = getMaddyPythonPath();
+      final pythonDirectory = getPythonDirectory();
+
+      debugPrint('========================================');
+      debugPrint('Starting Maddy...');
+      debugPrint('Maddy path: $maddyPath');
+      debugPrint('Maddy exists: ${File(maddyPath).existsSync()}');
+      debugPrint('Working directory: $pythonDirectory');
 
       final process = await Process.start(
-        r'C:\Python314\python.exe',
-        ['-u', 'maddy.py'],
-        workingDirectory: r'F:\maddyassistant',
-        runInShell: true,
+        maddyPath,
+        [],
+        workingDirectory: pythonDirectory,
+        runInShell: false,
       );
 
-      debugPrint('Maddy Python process started.');
-
       maddyProcess = process;
+
+      debugPrint('Maddy started. PID: ${process.pid}');
+
+      if (!mounted) return;
 
       setState(() {
         isRunning = true;
         maddyStatus = 'Maddy is listening...';
       });
 
-      process.stdout.transform(SystemEncoding().decoder).listen((data) {
-        debugPrint('MADDY: $data');
+      process.stdout.transform(utf8.decoder).listen((data) {
+        debugPrint('MADDY OUTPUT: $data');
       });
 
-      process.stderr.transform(SystemEncoding().decoder).listen((data) {
+      process.stderr.transform(utf8.decoder).listen((data) {
         debugPrint('MADDY ERROR: $data');
       });
 
       process.exitCode.then((exitCode) {
+        debugPrint('Maddy exited with code: $exitCode');
+
         if (!mounted) return;
 
         setState(() {
@@ -145,11 +227,11 @@ print(system_info.get_battery())
           maddyProcess = null;
           maddyStatus = 'Ready when you are.';
         });
-
-        debugPrint('Maddy exited with code: $exitCode');
       });
     } catch (e) {
-      debugPrint('Could not start Maddy: $e');
+      debugPrint('MADDY START ERROR: $e');
+
+      if (!mounted) return;
 
       setState(() {
         isRunning = false;
@@ -158,6 +240,10 @@ print(system_info.get_battery())
       });
     }
   }
+
+  // =========================================================
+  // STOP MADDY
+  // =========================================================
 
   Future<void> stopMaddy() async {
     final process = maddyProcess;
@@ -189,6 +275,10 @@ print(system_info.get_battery())
       maddyStatus = 'Ready when you are.';
     });
   }
+
+  // =========================================================
+  // VOICE WAVE
+  // =========================================================
 
   Widget buildVoiceWave() {
     return AnimatedBuilder(
@@ -228,6 +318,10 @@ print(system_info.get_battery())
     );
   }
 
+  // =========================================================
+  // SYSTEM INFO ITEM
+  // =========================================================
+
   Widget _systemInfoItem(String title, String value) {
     return Row(
       mainAxisSize: MainAxisSize.min,
@@ -253,12 +347,15 @@ print(system_info.get_battery())
     );
   }
 
+  // =========================================================
+  // BUILD
+  // =========================================================
+
   @override
   Widget build(BuildContext context) {
     final screenWidth = MediaQuery.of(context).size.width;
     final screenHeight = MediaQuery.of(context).size.height;
 
-    // Responsive sizes
     final horizontalPadding = screenWidth * 0.04;
 
     final robotSize = screenHeight * 0.36;
@@ -270,7 +367,6 @@ print(system_info.get_battery())
     final descriptionSize = screenWidth * 0.011;
 
     final verticalGapSmall = screenHeight * 0.015;
-    final verticalGapMedium = screenHeight * 0.025;
     final verticalGapLarge = screenHeight * 0.04;
 
     return Scaffold(
@@ -293,9 +389,9 @@ print(system_info.get_battery())
             ),
             child: Column(
               children: [
-                // =========================
+                // =====================================================
                 // TOP BAR
-                // =========================
+                // =====================================================
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
@@ -350,9 +446,9 @@ print(system_info.get_battery())
 
                 SizedBox(height: verticalGapLarge),
 
-                // =========================
+                // =====================================================
                 // ROBOT
-                // =========================
+                // =====================================================
                 Flexible(
                   flex: 5,
                   child: AnimatedBuilder(
@@ -375,7 +471,6 @@ print(system_info.get_battery())
                           child: Stack(
                             alignment: Alignment.center,
                             children: [
-                              // OUTER LISTENING RING
                               if (isRunning)
                                 Container(
                                   width: ringSize,
@@ -391,7 +486,6 @@ print(system_info.get_battery())
                                   ),
                                 ),
 
-                              // AI CORE
                               Container(
                                 width: safeRobotSize,
                                 height: safeRobotSize,
@@ -447,9 +541,9 @@ print(system_info.get_battery())
 
                 SizedBox(height: verticalGapSmall),
 
-                // =========================
+                // =====================================================
                 // MADDY NAME
-                // =========================
+                // =====================================================
                 Text(
                   'MADDY',
                   style: TextStyle(
@@ -461,9 +555,9 @@ print(system_info.get_battery())
 
                 SizedBox(height: verticalGapSmall),
 
-                // =========================
+                // =====================================================
                 // DESCRIPTION
-                // =========================
+                // =====================================================
                 AnimatedContainer(
                   duration: const Duration(milliseconds: 400),
                   padding: const EdgeInsets.symmetric(
@@ -502,10 +596,11 @@ print(system_info.get_battery())
                   ),
                 ),
 
-                // SizedBox(height: verticalGapMedium),
                 const SizedBox(height: 25),
 
-                // const SizedBox(height: 25),
+                // =====================================================
+                // SYSTEM STATUS
+                // =====================================================
                 if (!kIsWeb)
                   Container(
                     width: double.infinity,
@@ -518,8 +613,8 @@ print(system_info.get_battery())
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Center(
-                          child: const Text(
+                        const Center(
+                          child: Text(
                             'SYSTEM STATUS',
                             style: TextStyle(
                               color: Colors.white,
@@ -544,10 +639,12 @@ print(system_info.get_battery())
                       ],
                     ),
                   ),
+
                 const SizedBox(height: 30),
-                // =========================
+
+                // =====================================================
                 // BUTTONS
-                // =========================
+                // =====================================================
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
@@ -668,9 +765,9 @@ print(system_info.get_battery())
 
                 SizedBox(height: verticalGapSmall),
 
-                // =========================
+                // =====================================================
                 // MICROPHONE
-                // =========================
+                // =====================================================
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
@@ -700,9 +797,9 @@ print(system_info.get_battery())
 
                 const Spacer(),
 
-                // =========================
+                // =====================================================
                 // FOOTER
-                // =========================
+                // =====================================================
                 Text(
                   'MADDY AI • DESKTOP ASSISTANT',
                   style: TextStyle(

@@ -1,0 +1,27 @@
+# Flutter generated files
+**/.dart_tool/
+**/build/
+**/.flutter-plugins
+**/.flutter-plugins-dependencies
+**/.packages
+
+# Python generated files
+**/__pycache__/
+**/*.pyc
+**/.venv/
+**/venv/
+
+# PyInstaller generated files
+**/dist/
+**/build/
+
+# Final compiled Maddy release
+MaddyRelease/
+
+# IDE
+.vscode/
+.idea/
+
+# Windows
+Thumbs.db
+Desktop.ini
